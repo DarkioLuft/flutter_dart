@@ -453,7 +453,7 @@ class _BookFormScreenState extends State<BookFormScreen> {
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
-                value: _status,
+                initialValue: _status,
                 decoration: const InputDecoration(labelText: 'Status', border: OutlineInputBorder()),
                 items: _statusOptions.map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
                 onChanged: (val) => setState(() => _status = val!),
