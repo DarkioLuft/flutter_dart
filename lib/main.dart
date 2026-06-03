@@ -148,6 +148,13 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+    _emailEC.dispose();
+    _passwordEC.dispose();
+    super.dispose();
+  }
 }
 
 // ============================================================================
@@ -317,13 +324,16 @@ class BooksListScreen extends StatelessWidget {
                     icon: const Icon(Icons.delete, color: Colors.red),
                     onPressed: () => _deleteBook(doc.id, context),
                   ),
+                  
                   onTap: () {
                     // Ao clicar no livro, abre a tela de notas (CRUD 2)
                     Navigator.push(context, MaterialPageRoute(builder: (_) => NotesListScreen(bookId: doc.id, bookTitle: bookData['title'])));
                   },
                   onLongPress: () {
                     // Editar livro
+
                     Navigator.push(context, MaterialPageRoute(builder: (_) => BookFormScreen(bookId: doc.id, initialData: bookData)));
+                    
                   },
                 ),
               );
@@ -351,9 +361,25 @@ class BooksListScreen extends StatelessWidget {
       ),
     );
 
-    if (confirm == true) {
+      if (confirm == true) {
+      // 1. Deleta todas as notas filhas primeiro
+      final notesSnapshot = await FirebaseFirestore.instance
+          .collection('books')
+          .doc(docId)
+          .collection('notes')
+          .get();
+      
+      for (final noteDoc in notesSnapshot.docs) {
+        await noteDoc.reference.delete();
+      }
+
+      // 2. Deleta o livro pai
       await FirebaseFirestore.instance.collection('books').doc(docId).delete();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Livro excluído.')));
+      
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Livro e anotações excluídos.')),
+      );
     }
   }
 }
@@ -402,6 +428,8 @@ class _BookFormScreenState extends State<BookFormScreen> {
       'pages': int.tryParse(_pagesEC.text.trim()) ?? 0,
       'status': _status,
       'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+      if (widget.bookId == null) 'createdAt': FieldValue.serverTimestamp(),
     };
 
     try {
@@ -411,11 +439,13 @@ class _BookFormScreenState extends State<BookFormScreen> {
         await FirebaseFirestore.instance.collection('books').doc(widget.bookId).update(bookData); // UPDATE
       }
       Navigator.pop(context);
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Livro salvo com sucesso!')));
     } catch (e) {
+      if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Erro: $e'), backgroundColor: Colors.red));
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -472,6 +502,14 @@ class _BookFormScreenState extends State<BookFormScreen> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+    _titleEC.dispose();
+    _authorEC.dispose();
+    _pagesEC.dispose();
+    super.dispose();
+  }
 }
 
 // ============================================================================
@@ -512,6 +550,7 @@ class NotesListScreen extends StatelessWidget {
                     icon: const Icon(Icons.delete, color: Colors.grey),
                     onPressed: () => doc.reference.delete(), // DELETE ANOTAÇÃO
                   ),
+                  onLongPress: () => _showEditNoteDialog(context, doc.id, noteData),
                 ),
               );
             },
@@ -569,6 +608,59 @@ class NotesListScreen extends StatelessWidget {
             },
             child: const Text('Salvar'),
           )
+        ],
+      ),
+    );
+  }
+
+  void _showEditNoteDialog(BuildContext context, String noteId, Map<String, dynamic> noteData) {
+    final refEC = TextEditingController(text: noteData['reference']);
+    final textEC = TextEditingController(text: noteData['text']);
+    final formKey = GlobalKey<FormState>();
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Editar Anotação'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: refEC,
+                decoration: const InputDecoration(labelText: 'Página ou Capítulo'),
+                validator: (val) => val == null || val.isEmpty ? 'Obrigatório' : null,
+              ),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: textEC,
+                decoration: const InputDecoration(labelText: 'Sua anotação'),
+                maxLines: 3,
+                validator: (val) => val == null || val.isEmpty ? 'Obrigatório' : null,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () async {
+              if (formKey.currentState!.validate()) {
+                await FirebaseFirestore.instance
+                    .collection('books')
+                    .doc(bookId)
+                    .collection('notes')
+                    .doc(noteId)
+                    .update({
+                  'reference': refEC.text.trim(),
+                  'text': textEC.text.trim(),
+                });
+                Navigator.pop(ctx);
+              }
+            },
+            child: const Text('Salvar'),
+          ),
         ],
       ),
     );
