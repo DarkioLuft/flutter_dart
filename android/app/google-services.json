@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1041877697151",
+    "project_id": "booklog-ed843",
+    "storage_bucket": "booklog-ed843.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1041877697151:android:01031039d10e6acaa8754a",
+        "android_client_info": {
+          "package_name": "com.example.flutter_dart"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBvyjot3l0CefWDM_v0s9JcdrBaIC3vo6I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
