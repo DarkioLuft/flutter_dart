@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -19,18 +19,18 @@ class _ShareListScreenState extends State<ShareListScreen> {
   String? _generatedCode;
   List<QueryDocumentSnapshot> _docs = [];
 
-  // Gera um código de 8 caracteres alfanumérico maiúsculo a partir do ID do Firestore
-  String _shortCode(String docId) {
-    return docId.substring(0, 8).toUpperCase();
+  // Gera um código legível de 8 caracteres sem caracteres ambíguos (0/O, 1/I/L)
+  static const _charset = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  String _generateShortCode() {
+    final rng = Random.secure();
+    return List.generate(8, (_) => _charset[rng.nextInt(_charset.length)]).join();
   }
 
   Future<void> _generateCode() async {
     if (_selectedIds.isEmpty) return;
-
     setState(() => _isGenerating = true);
 
     try {
-      // Monta a lista de livros selecionados (sem anotações)
       final selectedBooks = _docs
           .where((d) => _selectedIds.contains(d.id))
           .map((d) {
@@ -44,34 +44,31 @@ class _ShareListScreenState extends State<ShareListScreen> {
           })
           .toList();
 
-      final payload = {
-        'books': selectedBooks,
-        'createdAt': DateTime.now().millisecondsSinceEpoch,
-        'createdBy': FirebaseAuth.instance.currentUser?.email ?? '',
-        'count': selectedBooks.length,
-      };
+      // Tenta até 3 vezes caso o código já exista (colisão improvável mas seguro)
+      String code = '';
+      for (int attempt = 0; attempt < 3; attempt++) {
+        code = _generateShortCode();
+        final existing = await FirebaseFirestore.instance
+            .collection('shared_lists')
+            .doc(code)
+            .get();
+        if (!existing.exists) break;
+      }
 
-      // Codifica o payload em base64 (sem dependências extras)
-      final jsonStr = jsonEncode(payload);
-      final bytes = utf8.encode(jsonStr);
-      final code = base64Url.encode(bytes);
-
-      // Salva no Firestore para validação opcional e rastreamento
-      final docRef = await FirebaseFirestore.instance
+      // Salva usando o código curto como ID do documento
+      await FirebaseFirestore.instance
           .collection('shared_lists')
-          .add({
-        'code': code,
+          .doc(code)
+          .set({
         'books': selectedBooks,
         'createdAt': FieldValue.serverTimestamp(),
         'createdBy': FirebaseAuth.instance.currentUser?.uid,
+        'createdByEmail': FirebaseAuth.instance.currentUser?.email ?? '',
         'count': selectedBooks.length,
       });
 
-      // Código final = shortId + "." + base64 (o shortId serve como prefixo legível)
-      final finalCode = '${_shortCode(docRef.id)}.$code';
-
       setState(() {
-        _generatedCode = finalCode;
+        _generatedCode = code;
         _isGenerating = false;
       });
     } catch (e) {
@@ -137,17 +134,12 @@ class _ShareListScreenState extends State<ShareListScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(
-                      Icons.library_books_outlined,
-                      size: 64,
-                      color: AppColors.primary.withOpacity(0.3),
-                    ),
+                    Icon(Icons.library_books_outlined,
+                        size: 64, color: AppColors.primary.withOpacity(0.3)),
                     const SizedBox(height: 16),
-                    Text(
-                      'Nenhum livro na estante',
-                      style: AppTextStyles.headlineSmall
-                          .copyWith(color: AppColors.textSecondary),
-                    ),
+                    Text('Nenhum livro na estante',
+                        style: AppTextStyles.headlineSmall
+                            .copyWith(color: AppColors.textSecondary)),
                     const SizedBox(height: 8),
                     Text(
                       'Adicione livros à sua estante primeiro para poder compartilhá-los.',
@@ -160,7 +152,6 @@ class _ShareListScreenState extends State<ShareListScreen> {
             );
           }
 
-          // Ordena em memória: mais recentes primeiro
           _docs = snapshot.data!.docs.toList()
             ..sort((a, b) {
               final aT = (a.data() as Map)['createdAt'] as Timestamp?;
@@ -171,7 +162,6 @@ class _ShareListScreenState extends State<ShareListScreen> {
               return bT.compareTo(aT);
             });
 
-          // Se já gerou o código, mostra a tela de resultado
           if (_generatedCode != null) {
             return _CodeResultView(
               code: _generatedCode!,
@@ -183,7 +173,6 @@ class _ShareListScreenState extends State<ShareListScreen> {
 
           return Column(
             children: [
-              // Banner de instrução
               Container(
                 margin: const EdgeInsets.all(16),
                 padding: const EdgeInsets.all(16),
@@ -199,7 +188,7 @@ class _ShareListScreenState extends State<ShareListScreen> {
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Selecione os livros que deseja compartilhar. Um código será gerado para outro usuário importar.',
+                        'Selecione os livros que deseja compartilhar. Um código curto será gerado para outro usuário importar.',
                         style: AppTextStyles.bodyMedium
                             .copyWith(color: AppColors.primary),
                       ),
@@ -207,16 +196,12 @@ class _ShareListScreenState extends State<ShareListScreen> {
                   ],
                 ),
               ),
-
-              // Barra de seleção total
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Row(
                   children: [
-                    Text(
-                      '${_selectedIds.length} de ${_docs.length} selecionados',
-                      style: AppTextStyles.labelBold,
-                    ),
+                    Text('${_selectedIds.length} de ${_docs.length} selecionados',
+                        style: AppTextStyles.labelBold),
                     const Spacer(),
                     TextButton.icon(
                       onPressed: () {
@@ -224,8 +209,7 @@ class _ShareListScreenState extends State<ShareListScreen> {
                           if (_selectedIds.length == _docs.length) {
                             _selectedIds.clear();
                           } else {
-                            _selectedIds
-                                .addAll(_docs.map((d) => d.id));
+                            _selectedIds.addAll(_docs.map((d) => d.id));
                           }
                         });
                       },
@@ -244,8 +228,6 @@ class _ShareListScreenState extends State<ShareListScreen> {
                   ],
                 ),
               ),
-
-              // Lista de livros
               Expanded(
                 child: ListView.builder(
                   padding: const EdgeInsets.only(
@@ -255,17 +237,14 @@ class _ShareListScreenState extends State<ShareListScreen> {
                     final doc = _docs[index];
                     final data = doc.data() as Map<String, dynamic>;
                     final isSelected = _selectedIds.contains(doc.id);
-
                     return _SelectableBookCard(
                       data: data,
                       isSelected: isSelected,
                       onToggle: () {
                         setState(() {
-                          if (isSelected) {
-                            _selectedIds.remove(doc.id);
-                          } else {
-                            _selectedIds.add(doc.id);
-                          }
+                          isSelected
+                              ? _selectedIds.remove(doc.id)
+                              : _selectedIds.add(doc.id);
                         });
                       },
                     );
@@ -276,8 +255,6 @@ class _ShareListScreenState extends State<ShareListScreen> {
           );
         },
       ),
-
-      // Botão flutuante de gerar código
       floatingActionButton: _generatedCode == null
           ? AnimatedScale(
               scale: _selectedIds.isNotEmpty ? 1.0 : 0.0,
@@ -289,16 +266,12 @@ class _ShareListScreenState extends State<ShareListScreen> {
                         width: 20,
                         height: 20,
                         child: CircularProgressIndicator(
-                          color: Colors.white,
-                          strokeWidth: 2,
-                        ),
+                            color: Colors.white, strokeWidth: 2),
                       )
                     : const Icon(Icons.qr_code_rounded),
-                label: Text(
-                  _isGenerating
-                      ? 'Gerando...'
-                      : 'Gerar Código (${_selectedIds.length})',
-                ),
+                label: Text(_isGenerating
+                    ? 'Gerando...'
+                    : 'Gerar Código (${_selectedIds.length})'),
               ),
             )
           : null,
@@ -335,29 +308,21 @@ class _SelectableBookCard extends StatelessWidget {
               : AppColors.surface,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color:
-                isSelected ? AppColors.primary : const Color(0xFFE5E7EB),
+            color: isSelected ? AppColors.primary : const Color(0xFFE5E7EB),
             width: isSelected ? 2 : 1,
           ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: AppColors.primary.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 2),
-                  )
-                ]
-              : [
-                  BoxShadow(
-                    color: AppColors.cardShadow,
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  )
-                ],
+          boxShadow: [
+            BoxShadow(
+              color: isSelected
+                  ? AppColors.primary.withOpacity(0.1)
+                  : AppColors.cardShadow,
+              blurRadius: isSelected ? 8 : 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Row(
           children: [
-            // Checkbox visual
             AnimatedContainer(
               duration: const Duration(milliseconds: 180),
               width: 24,
@@ -373,13 +338,10 @@ class _SelectableBookCard extends StatelessWidget {
                 ),
               ),
               child: isSelected
-                  ? const Icon(Icons.check_rounded,
-                      color: Colors.white, size: 16)
+                  ? const Icon(Icons.check_rounded, color: Colors.white, size: 16)
                   : null,
             ),
             const SizedBox(width: 12),
-
-            // Ícone livro
             Container(
               width: 42,
               height: 42,
@@ -391,35 +353,26 @@ class _SelectableBookCard extends StatelessWidget {
                   color: AppColors.primary, size: 22),
             ),
             const SizedBox(width: 12),
-
-            // Informações
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    data['title'] ?? '',
-                    style: AppTextStyles.labelBold,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Text(data['title'] ?? '',
+                      style: AppTextStyles.labelBold,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 3),
-                  Text(
-                    data['author'] ?? '',
-                    style: AppTextStyles.bodyMedium,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                  Text(data['author'] ?? '',
+                      style: AppTextStyles.bodyMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 6),
                   Row(
                     children: [
                       StatusChip(status: data['status'] ?? ''),
                       const SizedBox(width: 8),
-                      Text(
-                        '${data['pages'] ?? 0} págs.',
-                        style: AppTextStyles.bodyMedium
-                            .copyWith(fontSize: 11),
-                      ),
+                      Text('${data['pages'] ?? 0} págs.',
+                          style: AppTextStyles.bodyMedium.copyWith(fontSize: 11)),
                     ],
                   ),
                 ],
@@ -451,16 +404,11 @@ class _CodeResultView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Exibe apenas o prefixo legível na UI; o código completo vai para o clipboard
-    final displayPrefix = code.split('.').first;
-
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
         children: [
           const SizedBox(height: 16),
-
-          // Ícone de sucesso
           Container(
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
@@ -471,7 +419,6 @@ class _CodeResultView extends StatelessWidget {
                 color: AppColors.success, size: 56),
           ),
           const SizedBox(height: 20),
-
           Text('Código Gerado!', style: AppTextStyles.headlineMedium),
           const SizedBox(height: 8),
           Text(
@@ -480,7 +427,7 @@ class _CodeResultView extends StatelessWidget {
           ),
           const SizedBox(height: 32),
 
-          // Box do código
+          // Box do código — agora exibe o código COMPLETO (ele É o código curto)
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(20),
@@ -491,48 +438,43 @@ class _CodeResultView extends StatelessWidget {
                   color: AppColors.primary.withOpacity(0.3), width: 1.5),
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.cardShadow,
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
+                    color: AppColors.cardShadow,
+                    blurRadius: 12,
+                    offset: const Offset(0, 4)),
               ],
             ),
             child: Column(
               children: [
                 Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
                     const Icon(Icons.tag_rounded,
                         color: AppColors.primary, size: 18),
                     const SizedBox(width: 6),
-                    Text('ID do compartilhamento',
-                        style: AppTextStyles.bodyMedium
-                            .copyWith(fontSize: 12)),
+                    Text('Código de compartilhamento',
+                        style: AppTextStyles.bodyMedium.copyWith(fontSize: 12)),
                   ],
                 ),
-                const SizedBox(height: 10),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                      vertical: 14, horizontal: 16),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withOpacity(0.06),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    displayPrefix,
-                    style: const TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w800,
-                      color: AppColors.primary,
-                      letterSpacing: 6,
-                      fontFamily: 'monospace',
+                const SizedBox(height: 14),
+                // Código dividido em dois blocos de 4 para facilitar leitura
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _CodeBlock(text: code.substring(0, 4)),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      child: Text('—',
+                          style: TextStyle(
+                              fontSize: 24,
+                              color: AppColors.primary.withOpacity(0.4),
+                              fontWeight: FontWeight.w300)),
                     ),
-                    textAlign: TextAlign.center,
-                  ),
+                    _CodeBlock(text: code.substring(4, 8)),
+                  ],
                 ),
                 const SizedBox(height: 14),
                 Text(
-                  'O código completo será copiado ao tocar no botão abaixo. Compartilhe-o com quem desejar.',
+                  'Compartilhe este código com quem desejar. Ele pode ser digitado diretamente na importação.',
                   style: AppTextStyles.bodyMedium.copyWith(fontSize: 12),
                   textAlign: TextAlign.center,
                 ),
@@ -541,15 +483,13 @@ class _CodeResultView extends StatelessWidget {
           ),
           const SizedBox(height: 20),
 
-          // Aviso
           Container(
             padding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               color: AppColors.warning.withOpacity(0.08),
               borderRadius: BorderRadius.circular(12),
-              border:
-                  Border.all(color: AppColors.warning.withOpacity(0.25)),
+              border: Border.all(color: AppColors.warning.withOpacity(0.25)),
             ),
             child: Row(
               children: [
@@ -567,18 +507,15 @@ class _CodeResultView extends StatelessWidget {
           ),
           const SizedBox(height: 28),
 
-          // Botão copiar
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
               onPressed: onCopy,
               icon: const Icon(Icons.copy_rounded),
-              label: const Text('COPIAR CÓDIGO COMPLETO'),
+              label: const Text('COPIAR CÓDIGO'),
             ),
           ),
           const SizedBox(height: 12),
-
-          // Botão gerar outro
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
@@ -595,6 +532,33 @@ class _CodeResultView extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _CodeBlock extends StatelessWidget {
+  final String text;
+  const _CodeBlock({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 18),
+      decoration: BoxDecoration(
+        color: AppColors.primary.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.primary.withOpacity(0.2)),
+      ),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 30,
+          fontWeight: FontWeight.w800,
+          color: AppColors.primary,
+          letterSpacing: 8,
+          fontFamily: 'monospace',
+        ),
       ),
     );
   }
